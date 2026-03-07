@@ -12,6 +12,24 @@ class OverlayView: NSView {
     var currentColor: NSColor = .systemRed
     var currentLineWidth: CGFloat = 3.0
 
+    // Feature: Fade mode
+    var fadeEnabled = false
+    private let fadeDuration: TimeInterval = 2.0
+    private var fadeTimer: Timer?
+
+    // Feature: Board mode
+    var boardMode: BoardMode = .none {
+        didSet { needsDisplay = true }
+    }
+
+    // Feature: Cursor spotlight
+    var spotlightEnabled = false
+    private let spotlightRadius: CGFloat = 60.0
+    private var mouseLocation: CGPoint = .zero
+
+    // Feature: Shift constraint
+    private var shiftHeld = false
+
     // MARK: - Init
 
     override init(frame: NSRect) {
@@ -38,19 +56,49 @@ class OverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor.clear.set()
-        dirtyRect.fill()
 
+        // Board mode background
+        switch boardMode {
+        case .whiteboard:
+            NSColor.white.setFill()
+            dirtyRect.fill()
+        case .blackboard:
+            NSColor(white: 0.15, alpha: 1.0).setFill()
+            dirtyRect.fill()
+        case .none:
+            NSColor.clear.set()
+            dirtyRect.fill()
+        }
+
+        // Draw annotations (with fade alpha if enabled)
+        let now = Date()
         for annotation in annotations {
-            drawAnnotation(annotation)
+            let alpha = fadeAlpha(for: annotation, at: now)
+            if alpha > 0 {
+                drawAnnotation(annotation, alpha: alpha)
+            }
         }
         if let current = currentAnnotation {
-            drawAnnotation(current)
+            drawAnnotation(current, alpha: 1.0)
+        }
+
+        // Cursor spotlight
+        if spotlightEnabled {
+            drawSpotlight()
         }
     }
 
-    private func drawAnnotation(_ annotation: Annotation) {
-        let color = annotation.color
+    private func fadeAlpha(for annotation: Annotation, at now: Date) -> CGFloat {
+        guard fadeEnabled else { return 1.0 }
+        let age = now.timeIntervalSince(annotation.creationTime)
+        if age >= fadeDuration { return 0.0 }
+        if age <= fadeDuration * 0.5 { return 1.0 }
+        // Fade out in second half
+        return CGFloat(1.0 - (age - fadeDuration * 0.5) / (fadeDuration * 0.5))
+    }
+
+    private func drawAnnotation(_ annotation: Annotation, alpha: CGFloat) {
+        let color = annotation.color.withAlphaComponent(annotation.color.alphaComponent * alpha)
         let lineWidth = annotation.lineWidth
 
         switch annotation.tool {
@@ -65,12 +113,44 @@ class OverlayView: NSView {
         case .circle:
             drawCircle(annotation.points, color: color, lineWidth: lineWidth)
         case .highlighter:
-            drawFreehand(annotation.points, color: color.withAlphaComponent(0.3), lineWidth: lineWidth * 4)
+            drawFreehand(annotation.points, color: color.withAlphaComponent(0.3 * alpha), lineWidth: lineWidth * 4)
         case .text:
             break
         case .eraser:
             break
         }
+    }
+
+    // MARK: - Spotlight
+
+    private func drawSpotlight() {
+        let ctx = NSGraphicsContext.current?.cgContext
+        ctx?.saveGState()
+
+        // Dark overlay with spotlight hole
+        let overlayColor = NSColor.black.withAlphaComponent(0.4)
+        overlayColor.setFill()
+        bounds.fill()
+
+        // Cut out spotlight circle
+        ctx?.setBlendMode(.clear)
+        let spotRect = NSRect(
+            x: mouseLocation.x - spotlightRadius,
+            y: mouseLocation.y - spotlightRadius,
+            width: spotlightRadius * 2,
+            height: spotlightRadius * 2
+        )
+        let spotPath = NSBezierPath(ovalIn: spotRect)
+        spotPath.fill()
+
+        // Soft edge glow
+        ctx?.setBlendMode(.normal)
+        let glowRect = spotRect.insetBy(dx: -10, dy: -10)
+        let glowPath = NSBezierPath(ovalIn: glowRect)
+        NSColor.white.withAlphaComponent(0.05).setFill()
+        glowPath.fill()
+
+        ctx?.restoreGState()
     }
 
     // MARK: - Shape Drawing
@@ -90,7 +170,8 @@ class OverlayView: NSView {
     }
 
     private func drawLine(_ points: [CGPoint], color: NSColor, lineWidth: CGFloat) {
-        guard let first = points.first, let last = points.last else { return }
+        guard let first = points.first, var last = points.last else { return }
+        if shiftHeld { last = constrainToAxis(from: first, to: last) }
         let path = NSBezierPath()
         path.lineWidth = lineWidth
         path.lineCapStyle = .round
@@ -101,7 +182,8 @@ class OverlayView: NSView {
     }
 
     private func drawArrow(_ points: [CGPoint], color: NSColor, lineWidth: CGFloat) {
-        guard let first = points.first, let last = points.last, first != last else { return }
+        guard let first = points.first, var last = points.last, first != last else { return }
+        if shiftHeld { last = constrainToAxis(from: first, to: last) }
         let path = NSBezierPath()
         path.lineWidth = lineWidth
         path.lineCapStyle = .round
@@ -131,7 +213,8 @@ class OverlayView: NSView {
     }
 
     private func drawRectangle(_ points: [CGPoint], color: NSColor, lineWidth: CGFloat) {
-        guard let first = points.first, let last = points.last else { return }
+        guard let first = points.first, var last = points.last else { return }
+        if shiftHeld { last = constrainToSquare(from: first, to: last) }
         let rect = NSRect(
             x: min(first.x, last.x),
             y: min(first.y, last.y),
@@ -145,7 +228,8 @@ class OverlayView: NSView {
     }
 
     private func drawCircle(_ points: [CGPoint], color: NSColor, lineWidth: CGFloat) {
-        guard let first = points.first, let last = points.last else { return }
+        guard let first = points.first, var last = points.last else { return }
+        if shiftHeld { last = constrainToSquare(from: first, to: last) }
         let rect = NSRect(
             x: min(first.x, last.x),
             y: min(first.y, last.y),
@@ -156,6 +240,41 @@ class OverlayView: NSView {
         path.lineWidth = lineWidth
         color.setStroke()
         path.stroke()
+    }
+
+    // MARK: - Shift Constraint Helpers
+
+    /// Constrain line to nearest 0°/45°/90° axis
+    private func constrainToAxis(from start: CGPoint, to end: CGPoint) -> CGPoint {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let angle = atan2(abs(dy), abs(dx))
+
+        if angle < .pi / 8 {
+            // Horizontal
+            return CGPoint(x: end.x, y: start.y)
+        } else if angle > .pi * 3 / 8 {
+            // Vertical
+            return CGPoint(x: start.x, y: end.y)
+        } else {
+            // 45 degree
+            let dist = max(abs(dx), abs(dy))
+            return CGPoint(
+                x: start.x + dist * (dx > 0 ? 1 : -1),
+                y: start.y + dist * (dy > 0 ? 1 : -1)
+            )
+        }
+    }
+
+    /// Constrain rectangle/circle to square (equal width & height)
+    private func constrainToSquare(from start: CGPoint, to end: CGPoint) -> CGPoint {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let size = max(abs(dx), abs(dy))
+        return CGPoint(
+            x: start.x + size * (dx > 0 ? 1 : -1),
+            y: start.y + size * (dy > 0 ? 1 : -1)
+        )
     }
 
     // MARK: - Mouse Events
@@ -195,6 +314,36 @@ class OverlayView: NSView {
         redoStack.removeAll()
         currentAnnotation = nil
         needsDisplay = true
+
+        // Start fade timer if needed
+        if fadeEnabled {
+            startFadeTimer()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        mouseLocation = convert(event.locationInWindow, from: nil)
+        if spotlightEnabled {
+            needsDisplay = true
+        }
+    }
+
+    // MARK: - Fade Timer
+
+    private func startFadeTimer() {
+        fadeTimer?.invalidate()
+        fadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            // Remove fully faded annotations
+            let now = Date()
+            self.annotations.removeAll { now.timeIntervalSince($0.creationTime) >= self.fadeDuration }
+            self.needsDisplay = true
+            // Stop timer if nothing to fade
+            if self.annotations.isEmpty {
+                self.fadeTimer?.invalidate()
+                self.fadeTimer = nil
+            }
+        }
     }
 
     // MARK: - Keyboard (keyCode based, input-method safe)
@@ -207,8 +356,8 @@ class OverlayView: NSView {
         let shift = flags.contains(.shift)
 
         switch code {
-        // Tools (single key, like Presentify)
-        case 3:  currentTool = .pen          // F (Freehand)
+        // Tools
+        case 3:  currentTool = .pen          // F
         case 0:  currentTool = .arrow        // A
         case 37: currentTool = .line         // L
         case 15: currentTool = .rectangle    // R
@@ -218,11 +367,11 @@ class OverlayView: NSView {
         case 14: currentTool = .eraser       // E
 
         // Colors 1-5
-        case 18: currentColor = .systemRed       // 1
-        case 19: currentColor = .systemOrange    // 2
-        case 20: currentColor = .systemYellow    // 3
-        case 21: currentColor = .systemGreen     // 4
-        case 23: currentColor = .systemBlue      // 5
+        case 18: currentColor = .systemRed
+        case 19: currentColor = .systemOrange
+        case 20: currentColor = .systemYellow
+        case 21: currentColor = .systemGreen
+        case 23: currentColor = .systemBlue
 
         // Line width
         case 33: currentLineWidth = max(1, currentLineWidth - 1) // [
@@ -231,11 +380,25 @@ class OverlayView: NSView {
         // Editing
         case 6 where cmd && shift: redoLast()    // ⌘⇧Z
         case 6 where cmd: undoLast()              // ⌘Z
-        case 51 where opt:                           // ⌥⌫ — clear all + close
+        case 51 where opt:                        // ⌥⌫ — clear all + close
             (NSApp.delegate as? AppDelegate)?.clearAllAnnotations()
         case 51: deleteLastAnnotation()           // ⌫ — delete last
 
-        // Escape — pause (keep drawings, exit drawing mode)
+        // Toggle features
+        case 49:                                  // Space — toggle fade mode
+            fadeEnabled.toggle()
+            if fadeEnabled { startFadeTimer() }
+        case 13:                                  // W — cycle board mode
+            switch boardMode {
+            case .none: boardMode = .whiteboard
+            case .whiteboard: boardMode = .blackboard
+            case .blackboard: boardMode = .none
+            }
+        case 40:                                  // K — toggle spotlight
+            spotlightEnabled.toggle()
+            needsDisplay = true
+
+        // Escape — pause
         case 53:
             (NSApp.delegate as? AppDelegate)?.toggleDrawing()
 
@@ -243,7 +406,15 @@ class OverlayView: NSView {
             break
         }
 
+        updateHUD()
         NSCursor.crosshair.set()
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        shiftHeld = event.modifierFlags.contains(.shift)
+        if currentAnnotation != nil {
+            needsDisplay = true
+        }
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -257,12 +428,71 @@ class OverlayView: NSView {
         NSCursor.crosshair.set()
     }
 
+    // MARK: - HUD (floating status)
+
+    private lazy var hudLabel: NSTextField = {
+        let label = NSTextField(labelWithString: "")
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .white
+        label.backgroundColor = NSColor.black.withAlphaComponent(0.7)
+        label.isBezeled = false
+        label.isEditable = false
+        label.drawsBackground = true
+        label.alignment = .center
+        label.wantsLayer = true
+        label.layer?.cornerRadius = 8
+        label.layer?.masksToBounds = true
+        addSubview(label)
+        return label
+    }()
+
+    private var hudHideTimer: Timer?
+
+    private func updateHUD() {
+        let parts: [String] = [
+            currentTool.rawValue,
+            colorName(currentColor),
+            "W:\(Int(currentLineWidth))",
+            fadeEnabled ? "Fade" : nil,
+            boardMode != .none ? boardMode.rawValue : nil,
+            spotlightEnabled ? "Spot" : nil,
+        ].compactMap { $0 }
+
+        hudLabel.stringValue = "  " + parts.joined(separator: " | ") + "  "
+        hudLabel.sizeToFit()
+
+        // Position at top center of view
+        let x = (bounds.width - hudLabel.frame.width) / 2
+        let y = bounds.height - hudLabel.frame.height - 40
+        hudLabel.frame = NSRect(x: x, y: y, width: hudLabel.frame.width + 16, height: hudLabel.frame.height + 8)
+        hudLabel.isHidden = false
+
+        // Auto-hide after 2 seconds
+        hudHideTimer?.invalidate()
+        hudHideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            self?.hudLabel.isHidden = true
+        }
+    }
+
+    private func colorName(_ color: NSColor) -> String {
+        switch color {
+        case .systemRed: return "Red"
+        case .systemOrange: return "Orange"
+        case .systemYellow: return "Yellow"
+        case .systemGreen: return "Green"
+        case .systemBlue: return "Blue"
+        default: return "Custom"
+        }
+    }
+
     // MARK: - Actions
 
     func clearAll() {
         annotations.removeAll()
         redoStack.removeAll()
         currentAnnotation = nil
+        fadeTimer?.invalidate()
+        fadeTimer = nil
         needsDisplay = true
     }
 
