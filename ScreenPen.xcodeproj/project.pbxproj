@@ -12,6 +12,7 @@
 		A1000003 /* OverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003; };
 		A1000004 /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004; };
 		A1000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000005; };
+		A1000006 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000008; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,6 +23,7 @@
 		A2000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000007 /* ScreenPen.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScreenPen.entitlements; sourceTree = "<group>"; };
+		A2000008 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		A2000010 /* ScreenPen.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScreenPen.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -47,6 +49,7 @@
 		A4000002 /* ScreenPen */ = {
 			isa = PBXGroup;
 			children = (
+				A2000008 /* main.swift */,
 				A2000001 /* AppDelegate.swift */,
 				A4000003 /* Views */,
 				A4000004 /* Models */,
@@ -155,6 +158,7 @@
 				A1000002 /* OverlayWindow.swift in Sources */,
 				A1000003 /* OverlayView.swift in Sources */,
 				A1000004 /* Annotation.swift in Sources */,
+				A1000006 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

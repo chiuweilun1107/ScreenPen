@@ -6,7 +6,7 @@ class OverlayView: NSView {
 
     private var annotations: [Annotation] = []
     private var currentAnnotation: Annotation?
-    private var undoStack: [Annotation] = []
+    private var redoStack: [Annotation] = []
 
     var currentTool: DrawingTool = .pen
     var currentColor: NSColor = .systemRed
@@ -41,12 +41,9 @@ class OverlayView: NSView {
         NSColor.clear.set()
         dirtyRect.fill()
 
-        // Draw completed annotations
         for annotation in annotations {
             drawAnnotation(annotation)
         }
-
-        // Draw current annotation in progress
         if let current = currentAnnotation {
             drawAnnotation(current)
         }
@@ -70,9 +67,9 @@ class OverlayView: NSView {
         case .highlighter:
             drawFreehand(annotation.points, color: color.withAlphaComponent(0.3), lineWidth: lineWidth * 4)
         case .text:
-            break // TODO: text input
+            break
         case .eraser:
-            break // eraser removes on mouse up
+            break
         }
     }
 
@@ -113,7 +110,6 @@ class OverlayView: NSView {
         color.setStroke()
         path.stroke()
 
-        // Arrow head
         let headLength: CGFloat = 15.0
         let headAngle: CGFloat = .pi / 6
         let angle = atan2(last.y - first.y, last.x - first.x)
@@ -196,43 +192,52 @@ class OverlayView: NSView {
     override func mouseUp(with event: NSEvent) {
         guard let annotation = currentAnnotation else { return }
         annotations.append(annotation)
-        undoStack.removeAll()
+        redoStack.removeAll()
         currentAnnotation = nil
         needsDisplay = true
     }
 
-    // MARK: - Keyboard
+    // MARK: - Keyboard (keyCode based, input-method safe)
 
     override func keyDown(with event: NSEvent) {
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let code = event.keyCode
         let cmd = event.modifierFlags.contains(.command)
+        let opt = event.modifierFlags.contains(.option)
+        let shift = event.modifierFlags.contains(.shift)
 
-        switch key {
-        case "p": currentTool = .pen
-        case "a": currentTool = .arrow
-        case "l": currentTool = .line
-        case "r": currentTool = .rectangle
-        case "o": currentTool = .circle
-        case "h": currentTool = .highlighter
-        case "t": currentTool = .text
-        case "e": currentTool = .eraser
-        case "z" where cmd: undoLast()
-        case "1": currentColor = .systemRed
-        case "2": currentColor = .systemOrange
-        case "3": currentColor = .systemYellow
-        case "4": currentColor = .systemGreen
-        case "5": currentColor = .systemBlue
-        case "6": currentColor = .systemPurple
-        case "7": currentColor = .white
-        case "8": currentColor = .black
-        case "[": currentLineWidth = max(1, currentLineWidth - 1)
-        case "]": currentLineWidth = min(20, currentLineWidth + 1)
+        switch code {
+        // Tools (single key, like Presentify)
+        case 3:  currentTool = .pen          // F (Freehand)
+        case 0:  currentTool = .arrow        // A
+        case 37: currentTool = .line         // L
+        case 15: currentTool = .rectangle    // R
+        case 8:  currentTool = .circle       // C
+        case 4:  currentTool = .highlighter  // H
+        case 17: currentTool = .text         // T
+        case 14: currentTool = .eraser       // E
+
+        // Colors 1-5
+        case 18: currentColor = .systemRed       // 1
+        case 19: currentColor = .systemOrange    // 2
+        case 20: currentColor = .systemYellow    // 3
+        case 21: currentColor = .systemGreen     // 4
+        case 23: currentColor = .systemBlue      // 5
+
+        // Line width
+        case 33: currentLineWidth = max(1, currentLineWidth - 1) // [
+        case 30: currentLineWidth = min(20, currentLineWidth + 1) // ]
+
+        // Editing
+        case 6 where cmd && shift: redoLast()    // ⌘⇧Z
+        case 6 where cmd: undoLast()              // ⌘Z
+        case 51 where opt: clearAll()             // ⌥⌫ — clear all
+        case 51: deleteLastAnnotation()           // ⌫ — delete last
+
+        // Escape — pause (keep drawings, exit drawing mode)
+        case 53:
+            (NSApp.delegate as? AppDelegate)?.toggleDrawing()
+
         default:
-            if event.keyCode == 53 { // Escape
-                (window as? OverlayWindow).flatMap { _ in
-                    (NSApp.delegate as? AppDelegate)?.toggleDrawing()
-                }
-            }
             break
         }
 
@@ -254,16 +259,28 @@ class OverlayView: NSView {
 
     func clearAll() {
         annotations.removeAll()
-        undoStack.removeAll()
+        redoStack.removeAll()
         currentAnnotation = nil
         needsDisplay = true
     }
 
     func undoLast() {
         if let last = annotations.popLast() {
-            undoStack.append(last)
+            redoStack.append(last)
             needsDisplay = true
         }
+    }
+
+    func redoLast() {
+        if let last = redoStack.popLast() {
+            annotations.append(last)
+            needsDisplay = true
+        }
+    }
+
+    private func deleteLastAnnotation() {
+        _ = annotations.popLast()
+        needsDisplay = true
     }
 
     private func eraseAtPoint(_ point: CGPoint) {
