@@ -201,9 +201,12 @@ class OverlayView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let code = event.keyCode
-        let cmd = event.modifierFlags.contains(.command)
-        let opt = event.modifierFlags.contains(.option)
-        let shift = event.modifierFlags.contains(.shift)
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let cmd = flags.contains(.command)
+        let opt = flags.contains(.option)
+        let shift = flags.contains(.shift)
+
+        NSLog("[ScreenPen] keyDown code=\(code) cmd=\(cmd) opt=\(opt) shift=\(shift) flags=\(flags.rawValue)")
 
         switch code {
         // Tools (single key, like Presentify)
@@ -230,7 +233,8 @@ class OverlayView: NSView {
         // Editing
         case 6 where cmd && shift: redoLast()    // ⌘⇧Z
         case 6 where cmd: undoLast()              // ⌘Z
-        case 51 where opt: clearAll()             // ⌥⌫ — clear all
+        case 51 where opt:                           // ⌥⌫ — clear all + close
+            (NSApp.delegate as? AppDelegate)?.clearAllAnnotations()
         case 51: deleteLastAnnotation()           // ⌫ — delete last
 
         // Escape — pause (keep drawings, exit drawing mode)
