@@ -206,8 +206,6 @@ class OverlayView: NSView {
         let opt = flags.contains(.option)
         let shift = flags.contains(.shift)
 
-        NSLog("[ScreenPen] keyDown code=\(code) cmd=\(cmd) opt=\(opt) shift=\(shift) flags=\(flags.rawValue)")
-
         switch code {
         // Tools (single key, like Presentify)
         case 3:  currentTool = .pen          // F (Freehand)
