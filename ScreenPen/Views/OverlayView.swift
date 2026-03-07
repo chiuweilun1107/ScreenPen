@@ -477,71 +477,23 @@ class OverlayView: NSView {
         let opt = flags.contains(.option)
         let shift = flags.contains(.shift)
 
+        // Fixed shortcuts (not remappable)
         switch code {
-        // Tools
-        case 3:  currentTool = .pen          // F
-        case 0:  currentTool = .arrow        // A
-        case 37: currentTool = .line         // L
-        case 15: currentTool = .rectangle    // R
-        case 8:  currentTool = .circle       // C
-        case 4:  currentTool = .highlighter  // H
-        case 17: currentTool = .text         // T
-        case 14: currentTool = .eraser       // E
+        case 6 where cmd && shift: redoLast(); updateHUD(); return   // ⌘⇧Z
+        case 6 where cmd: undoLast(); updateHUD(); return            // ⌘Z
+        case 51 where opt:                                            // ⌥⌫
+            (NSApp.delegate as? AppDelegate)?.clearAllAnnotations(); return
+        case 51: deleteLastAnnotation(); updateHUD(); return          // ⌫
+        case 53:                                                      // Escape
+            if activeTextField != nil { cancelTextInput(); return }
+            (NSApp.delegate as? AppDelegate)?.toggleDrawing(); return
+        default: break
+        }
 
-        // Colors 1-5
-        case 18: currentColor = .systemRed
-        case 19: currentColor = .systemOrange
-        case 20: currentColor = .systemYellow
-        case 21: currentColor = .systemGreen
-        case 23: currentColor = .systemBlue
-
-        // Line width
-        case 33: currentLineWidth = max(1, currentLineWidth - 1) // [
-        case 30: currentLineWidth = min(20, currentLineWidth + 1) // ]
-
-        // Editing
-        case 6 where cmd && shift: redoLast()    // ⌘⇧Z
-        case 6 where cmd: undoLast()              // ⌘Z
-        case 51 where opt:                        // ⌥⌫ — clear all + close
-            (NSApp.delegate as? AppDelegate)?.clearAllAnnotations()
-        case 51: deleteLastAnnotation()           // ⌫ — delete last
-
-        // Toggle features
-        case 49:                                  // Space — toggle fade mode
-            fadeEnabled.toggle()
-            if fadeEnabled { startFadeTimer() }
-        case 13:                                  // W — cycle board mode
-            switch boardMode {
-            case .none: boardMode = .whiteboard
-            case .whiteboard: boardMode = .blackboard
-            case .blackboard: boardMode = .none
-            }
-        case 40:                                  // K — toggle spotlight
-            spotlightEnabled.toggle()
-            needsDisplay = true
-        case 34:                                   // I — toggle interactive mode
-            interactiveMode.toggle()
-            if interactiveMode {
-                // Start in passthrough mode (Fn to draw)
-                (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: false)
-            } else {
-                // Back to normal drawing mode
-                (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: true)
-            }
-        case 1:                                    // S — screenshot
-            captureScreenshot()
-            return
-
-        // Escape — pause (or cancel text input)
-        case 53:
-            if activeTextField != nil {
-                cancelTextInput()
-                return
-            }
-            (NSApp.delegate as? AppDelegate)?.toggleDrawing()
-
-        default:
-            break
+        // Configurable shortcuts via SettingsManager
+        let map = SettingsManager.shared.shortcutMap()
+        if let action = map[code] {
+            handleShortcutAction(action)
         }
 
         updateHUD()
@@ -572,6 +524,52 @@ class OverlayView: NSView {
     }
 
     override func cursorUpdate(with event: NSEvent) {
+        NSCursor.crosshair.set()
+    }
+
+    // MARK: - Shortcut Actions
+
+    private func handleShortcutAction(_ action: SettingsManager.ShortcutAction) {
+        switch action {
+        case .pen:         currentTool = .pen
+        case .arrow:       currentTool = .arrow
+        case .line:        currentTool = .line
+        case .rectangle:   currentTool = .rectangle
+        case .circle:      currentTool = .circle
+        case .highlighter: currentTool = .highlighter
+        case .text:        currentTool = .text
+        case .eraser:      currentTool = .eraser
+        case .color1:      currentColor = .systemRed
+        case .color2:      currentColor = .systemOrange
+        case .color3:      currentColor = .systemYellow
+        case .color4:      currentColor = .systemGreen
+        case .color5:      currentColor = .systemBlue
+        case .widthDown:   currentLineWidth = max(1, currentLineWidth - 1)
+        case .widthUp:     currentLineWidth = min(20, currentLineWidth + 1)
+        case .fadeToggle:
+            fadeEnabled.toggle()
+            if fadeEnabled { startFadeTimer() }
+        case .boardMode:
+            switch boardMode {
+            case .none: boardMode = .whiteboard
+            case .whiteboard: boardMode = .blackboard
+            case .blackboard: boardMode = .none
+            }
+        case .spotlight:
+            spotlightEnabled.toggle()
+            needsDisplay = true
+        case .interactive:
+            interactiveMode.toggle()
+            if interactiveMode {
+                (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: false)
+            } else {
+                (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: true)
+            }
+        case .screenshot:
+            captureScreenshot()
+            return
+        }
+        updateHUD()
         NSCursor.crosshair.set()
     }
 
