@@ -36,6 +36,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Clear All (⌥⌫)", action: #selector(clearAllAnnotations), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Undo (⌘Z)", action: #selector(undoLast), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         statusItem.menu = menu
@@ -64,7 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // ⌃A (Control + A) — keyCode 0 = 'a'
-        var hotKeyID = EventHotKeyID(signature: OSType(0x5350_454E), id: 1)
+        let hotKeyID = EventHotKeyID(signature: OSType(0x5350_454E), id: 1)
         let modifiers = UInt32(controlKey)
         RegisterEventHotKey(
             UInt32(kVK_ANSI_A),
@@ -135,9 +137,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Helpers
 
     private func showOverlays() {
+        let settings = SettingsManager.shared
         for screen in NSScreen.screens {
             if overlayWindows[screen] == nil {
                 let window = OverlayWindow(screen: screen)
+                if let view = window.contentView as? OverlayView {
+                    view.currentTool = settings.defaultTool
+                    view.currentColor = settings.defaultColor
+                    view.currentLineWidth = settings.defaultLineWidth
+                }
                 overlayWindows[screen] = window
             }
             overlayWindows[screen]?.orderFrontRegardless()
@@ -173,9 +181,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func openSettings() {
+        SettingsWindowController.show()
+    }
+
     @objc private func undoLast() {
         for (_, window) in overlayWindows {
             (window.contentView as? OverlayView)?.undoLast()
+        }
+    }
+
+    /// Interactive mode: toggle mouse passthrough without hiding overlays
+    func setInteractiveModeState(drawing: Bool) {
+        let maxLevel = [
+            CGWindowLevelForKey(.mainMenuWindow),
+            CGWindowLevelForKey(.statusWindow),
+            CGWindowLevelForKey(.popUpMenuWindow),
+            CGWindowLevelForKey(.screenSaverWindow)
+        ].map { Int($0) }.max() ?? 0
+
+        for (_, window) in overlayWindows {
+            window.ignoresMouseEvents = !drawing
+            if drawing {
+                window.level = NSWindow.Level(rawValue: maxLevel + 1)
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(window.contentView)
+            } else {
+                window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
+            }
         }
     }
 }

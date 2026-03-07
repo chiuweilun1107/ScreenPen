@@ -6,13 +6,17 @@ struct Annotation {
     let lineWidth: CGFloat
     var points: [CGPoint]
     let creationTime: Date
+    var text: String?
+    var fontSize: CGFloat
 
-    init(tool: DrawingTool, color: NSColor, lineWidth: CGFloat, points: [CGPoint]) {
+    init(tool: DrawingTool, color: NSColor, lineWidth: CGFloat, points: [CGPoint], text: String? = nil, fontSize: CGFloat = 16) {
         self.tool = tool
         self.color = color
         self.lineWidth = lineWidth
         self.points = points
         self.creationTime = Date()
+        self.text = text
+        self.fontSize = fontSize
     }
 }
 

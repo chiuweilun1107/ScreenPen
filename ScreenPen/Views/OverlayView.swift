@@ -14,7 +14,7 @@ class OverlayView: NSView {
 
     // Feature: Fade mode
     var fadeEnabled = false
-    private let fadeDuration: TimeInterval = 2.0
+    private var fadeDuration: TimeInterval { SettingsManager.shared.fadeDuration }
     private var fadeTimer: Timer?
 
     // Feature: Board mode
@@ -24,11 +24,18 @@ class OverlayView: NSView {
 
     // Feature: Cursor spotlight
     var spotlightEnabled = false
-    private let spotlightRadius: CGFloat = 60.0
+    private var spotlightRadius: CGFloat { SettingsManager.shared.spotlightRadius }
     private var mouseLocation: CGPoint = .zero
 
     // Feature: Shift constraint
     private var shiftHeld = false
+
+    // Feature: Text annotation
+    private var activeTextField: NSTextField?
+    private var textInsertPoint: CGPoint = .zero
+
+    // Feature: Interactive mode (Fn toggle)
+    var interactiveMode = false
 
     // MARK: - Init
 
@@ -115,7 +122,7 @@ class OverlayView: NSView {
         case .highlighter:
             drawFreehand(annotation.points, color: color.withAlphaComponent(0.3 * alpha), lineWidth: lineWidth * 4)
         case .text:
-            break
+            drawText(annotation, alpha: alpha)
         case .eraser:
             break
         }
@@ -242,6 +249,116 @@ class OverlayView: NSView {
         path.stroke()
     }
 
+    private func drawText(_ annotation: Annotation, alpha: CGFloat) {
+        guard let text = annotation.text, let position = annotation.points.first else { return }
+        let color = annotation.color.withAlphaComponent(annotation.color.alphaComponent * alpha)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: annotation.fontSize, weight: .medium),
+            .foregroundColor: color
+        ]
+        let nsString = text as NSString
+        nsString.draw(at: position, withAttributes: attrs)
+    }
+
+    // MARK: - Screenshot
+
+    func captureScreenshot() {
+        guard self.window != nil else { return }
+        // Temporarily hide HUD for clean capture
+        let hudWasVisible = !hudLabel.isHidden
+        hudLabel.isHidden = true
+
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        cacheDisplay(in: bounds, to: rep)
+
+        if hudWasVisible { hudLabel.isHidden = false }
+
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+
+        // Copy to clipboard
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([image])
+
+        // Save to Desktop
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+        let filename = "ScreenPen-\(formatter.string(from: Date())).png"
+        let desktopURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
+        let fileURL = desktopURL.appendingPathComponent(filename)
+
+        if let tiffData = image.tiffRepresentation,
+           let bitmapRep = NSBitmapImageRep(data: tiffData),
+           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+            try? pngData.write(to: fileURL)
+        }
+
+        // Flash feedback
+        showScreenshotFeedback()
+    }
+
+    private func showScreenshotFeedback() {
+        hudLabel.stringValue = "  Screenshot saved & copied  "
+        hudLabel.sizeToFit()
+        let x = (bounds.width - hudLabel.frame.width) / 2
+        let y = bounds.height - hudLabel.frame.height - 40
+        hudLabel.frame = NSRect(x: x, y: y, width: hudLabel.frame.width + 16, height: hudLabel.frame.height + 8)
+        hudLabel.isHidden = false
+        hudHideTimer?.invalidate()
+        hudHideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            self?.hudLabel.isHidden = true
+        }
+    }
+
+    // MARK: - Text Input
+
+    private func beginTextInput(at point: CGPoint) {
+        textInsertPoint = point
+        let textField = NSTextField(frame: NSRect(x: point.x, y: point.y - 10, width: 300, height: 24))
+        textField.font = NSFont.systemFont(ofSize: 16, weight: .medium)
+        textField.textColor = currentColor
+        textField.backgroundColor = NSColor.black.withAlphaComponent(0.3)
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.isEditable = true
+        textField.focusRingType = .none
+        textField.drawsBackground = true
+        textField.wantsLayer = true
+        textField.layer?.cornerRadius = 4
+        textField.target = self
+        textField.action = #selector(commitText(_:))
+        addSubview(textField)
+        window?.makeFirstResponder(textField)
+        activeTextField = textField
+    }
+
+    @objc private func commitText(_ sender: NSTextField) {
+        let text = sender.stringValue
+        if !text.isEmpty {
+            let annotation = Annotation(
+                tool: .text,
+                color: currentColor,
+                lineWidth: currentLineWidth,
+                points: [textInsertPoint],
+                text: text
+            )
+            annotations.append(annotation)
+            redoStack.removeAll()
+            if fadeEnabled { startFadeTimer() }
+        }
+        sender.removeFromSuperview()
+        activeTextField = nil
+        window?.makeFirstResponder(self)
+        needsDisplay = true
+    }
+
+    func cancelTextInput() {
+        activeTextField?.removeFromSuperview()
+        activeTextField = nil
+        window?.makeFirstResponder(self)
+    }
+
     // MARK: - Shift Constraint Helpers
 
     /// Constrain line to nearest 0°/45°/90° axis
@@ -284,6 +401,11 @@ class OverlayView: NSView {
 
         if currentTool == .eraser {
             eraseAtPoint(point)
+            return
+        }
+
+        if currentTool == .text {
+            beginTextInput(at: point)
             return
         }
 
@@ -397,9 +519,25 @@ class OverlayView: NSView {
         case 40:                                  // K — toggle spotlight
             spotlightEnabled.toggle()
             needsDisplay = true
+        case 34:                                   // I — toggle interactive mode
+            interactiveMode.toggle()
+            if interactiveMode {
+                // Start in passthrough mode (Fn to draw)
+                (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: false)
+            } else {
+                // Back to normal drawing mode
+                (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: true)
+            }
+        case 1:                                    // S — screenshot
+            captureScreenshot()
+            return
 
-        // Escape — pause
+        // Escape — pause (or cancel text input)
         case 53:
+            if activeTextField != nil {
+                cancelTextInput()
+                return
+            }
             (NSApp.delegate as? AppDelegate)?.toggleDrawing()
 
         default:
@@ -412,6 +550,15 @@ class OverlayView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         shiftHeld = event.modifierFlags.contains(.shift)
+
+        // Fn key toggle for interactive mode
+        let fnHeld = event.modifierFlags.contains(.function)
+        if interactiveMode {
+            // In interactive mode: Fn held = draw (interactive overlay), Fn released = passthrough
+            let shouldBeInteractive = fnHeld
+            (NSApp.delegate as? AppDelegate)?.setInteractiveModeState(drawing: shouldBeInteractive)
+        }
+
         if currentAnnotation != nil {
             needsDisplay = true
         }
@@ -456,6 +603,7 @@ class OverlayView: NSView {
             fadeEnabled ? "Fade" : nil,
             boardMode != .none ? boardMode.rawValue : nil,
             spotlightEnabled ? "Spot" : nil,
+            interactiveMode ? "Interactive(Fn)" : nil,
         ].compactMap { $0 }
 
         hudLabel.stringValue = "  " + parts.joined(separator: " | ") + "  "
