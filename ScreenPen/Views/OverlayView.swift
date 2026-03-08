@@ -317,13 +317,13 @@ class OverlayView: NSView {
     func captureScreenshot() {
         guard self.window != nil else { return }
         // Temporarily hide HUD for clean capture
-        let hudWasVisible = !hudLabel.isHidden
-        hudLabel.isHidden = true
+        let hudWasVisible = !hudPanel.isHidden
+        hudPanel.isHidden = true
 
         guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
         cacheDisplay(in: bounds, to: rep)
 
-        if hudWasVisible { hudLabel.isHidden = false }
+        if hudWasVisible { hudPanel.isHidden = false }
 
         let image = NSImage(size: bounds.size)
         image.addRepresentation(rep)
@@ -351,15 +351,23 @@ class OverlayView: NSView {
     }
 
     private func showScreenshotFeedback() {
-        hudLabel.stringValue = "  Screenshot saved & copied  "
-        hudLabel.sizeToFit()
-        let x = (bounds.width - hudLabel.frame.width) / 2
-        let y = bounds.height - hudLabel.frame.height - 40
-        hudLabel.frame = NSRect(x: x, y: y, width: hudLabel.frame.width + 16, height: hudLabel.frame.height + 8)
-        hudLabel.isHidden = false
-        hudHideTimer?.invalidate()
-        hudHideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            self?.hudLabel.isHidden = true
+        let previousText = hudPanel.currentText
+        hudPanel.setText("Screenshot saved & copied")
+        if hudPanel.isHidden {
+            hudPanel.sizeToFit()
+            let x = (bounds.width - hudPanel.frame.width) / 2
+            let y = bounds.height - hudPanel.frame.height - 40
+            hudPanel.setFrameOrigin(CGPoint(x: x, y: y))
+        }
+        hudPanel.isHidden = false
+        screenshotFeedbackTimer?.invalidate()
+        screenshotFeedbackTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            if let text = previousText {
+                self.hudPanel.setText(text)
+            } else {
+                self.updateHUD()
+            }
         }
     }
 
@@ -627,25 +635,19 @@ class OverlayView: NSView {
         NSCursor.crosshair.set()
     }
 
-    // MARK: - HUD (floating status)
+    // MARK: - HUD (floating status, draggable)
 
-    private lazy var hudLabel: NSTextField = {
-        let label = NSTextField(labelWithString: "")
-        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        label.textColor = .white
-        label.backgroundColor = NSColor.black.withAlphaComponent(0.7)
-        label.isBezeled = false
-        label.isEditable = false
-        label.drawsBackground = true
-        label.alignment = .center
-        label.wantsLayer = true
-        label.layer?.cornerRadius = 8
-        label.layer?.masksToBounds = true
-        addSubview(label)
-        return label
+    private lazy var hudPanel: HUDPanel = {
+        let panel = HUDPanel()
+        addSubview(panel)
+        panel.isHidden = true
+        panel.onClose = { [weak self] in
+            self?.hudPanel.isHidden = true
+        }
+        return panel
     }()
 
-    private var hudHideTimer: Timer?
+    private var screenshotFeedbackTimer: Timer?
 
     private func updateHUD() {
         let parts: [String] = [
@@ -658,20 +660,16 @@ class OverlayView: NSView {
             interactiveMode ? "Interactive(Fn)" : nil,
         ].compactMap { $0 }
 
-        hudLabel.stringValue = "  " + parts.joined(separator: " | ") + "  "
-        hudLabel.sizeToFit()
+        hudPanel.setText(parts.joined(separator: " | "))
 
-        // Position at top center of view
-        let x = (bounds.width - hudLabel.frame.width) / 2
-        let y = bounds.height - hudLabel.frame.height - 40
-        hudLabel.frame = NSRect(x: x, y: y, width: hudLabel.frame.width + 16, height: hudLabel.frame.height + 8)
-        hudLabel.isHidden = false
-
-        // Auto-hide after 2 seconds
-        hudHideTimer?.invalidate()
-        hudHideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            self?.hudLabel.isHidden = true
+        // Only reposition on first show; afterwards user may have dragged it
+        if hudPanel.isHidden {
+            hudPanel.sizeToFit()
+            let x = (bounds.width - hudPanel.frame.width) / 2
+            let y = bounds.height - hudPanel.frame.height - 40
+            hudPanel.setFrameOrigin(CGPoint(x: x, y: y))
         }
+        hudPanel.isHidden = false
     }
 
     private func colorName(_ color: NSColor) -> String {
@@ -724,4 +722,101 @@ class OverlayView: NSView {
         }
         needsDisplay = true
     }
+}
+
+// MARK: - HUDPanel (draggable, closeable)
+
+private class HUDPanel: NSView {
+    var onClose: (() -> Void)?
+    private(set) var currentText: String?
+
+    private let label: NSTextField = {
+        let l = NSTextField(labelWithString: "")
+        l.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        l.textColor = .white
+        l.isBezeled = false
+        l.isEditable = false
+        l.drawsBackground = false
+        return l
+    }()
+
+    private lazy var closeBtn: NSButton = {
+        let btn = NSButton(title: "✕", target: self, action: #selector(closeTapped))
+        btn.bezelStyle = .inline
+        btn.isBordered = false
+        btn.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        btn.contentTintColor = NSColor.white.withAlphaComponent(0.6)
+        return btn
+    }()
+
+    private var dragOffset: CGPoint = .zero
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        layer?.cornerRadius = 8
+        addSubview(label)
+        addSubview(closeBtn)
+    }
+
+    func setText(_ text: String) {
+        currentText = text
+        label.stringValue = text
+        label.sizeToFit()
+        sizeToFit()
+    }
+
+    func sizeToFit() {
+        let hPad: CGFloat = 12
+        let closeBtnW: CGFloat = 18
+        let gap: CGFloat = 6
+        let h: CGFloat = 30
+        let labelW = label.frame.width
+        let totalW = hPad + labelW + gap + closeBtnW + hPad
+
+        setFrameSize(NSSize(width: totalW, height: h))
+        label.frame = NSRect(
+            x: hPad,
+            y: (h - label.frame.height) / 2,
+            width: labelW,
+            height: label.frame.height
+        )
+        closeBtn.frame = NSRect(
+            x: totalW - closeBtnW - hPad,
+            y: (h - 16) / 2,
+            width: closeBtnW,
+            height: 16
+        )
+    }
+
+    @objc private func closeTapped() {
+        onClose?()
+    }
+
+    // MARK: Drag support
+
+    override func mouseDown(with event: NSEvent) {
+        dragOffset = convert(event.locationInWindow, from: nil)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let sv = superview else { return }
+        let loc = sv.convert(event.locationInWindow, from: nil)
+        setFrameOrigin(CGPoint(x: loc.x - dragOffset.x, y: loc.y - dragOffset.y))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override var acceptsFirstResponder: Bool { false }
 }
