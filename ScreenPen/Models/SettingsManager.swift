@@ -69,7 +69,7 @@ class SettingsManager {
 
     /// All configurable shortcut actions with their default keyCodes
     enum ShortcutAction: String, CaseIterable {
-        case pen, arrow, line, rectangle, circle, highlighter, text, eraser
+        case pen, arrow, line, rectangle, circle, heart, highlighter, text, eraser
         case screenshot, interactive, spotlight, boardMode, fadeToggle
         case color1, color2, color3, color4, color5
         case widthDown, widthUp
@@ -81,6 +81,7 @@ class SettingsManager {
             case .line: return "Line"
             case .rectangle: return "Rectangle"
             case .circle: return "Circle"
+            case .heart: return "Heart ♥"
             case .highlighter: return "Highlighter"
             case .text: return "Text"
             case .eraser: return "Eraser"
@@ -106,6 +107,7 @@ class SettingsManager {
             case .line: return 37        // L
             case .rectangle: return 15   // R
             case .circle: return 8       // C
+            case .heart: return 38       // J
             case .highlighter: return 4  // H
             case .text: return 17        // T
             case .eraser: return 14      // E

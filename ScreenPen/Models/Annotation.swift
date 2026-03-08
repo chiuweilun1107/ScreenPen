@@ -26,6 +26,7 @@ enum DrawingTool: String, CaseIterable {
     case line = "Line"
     case rectangle = "Rectangle"
     case circle = "Circle"
+    case heart = "Heart"
     case highlighter = "Highlighter"
     case text = "Text"
     case eraser = "Eraser"

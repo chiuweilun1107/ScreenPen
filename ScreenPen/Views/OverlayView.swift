@@ -119,6 +119,8 @@ class OverlayView: NSView {
             drawRectangle(annotation.points, color: color, lineWidth: lineWidth)
         case .circle:
             drawCircle(annotation.points, color: color, lineWidth: lineWidth)
+        case .heart:
+            drawHeart(annotation.points, color: color, lineWidth: lineWidth)
         case .highlighter:
             drawFreehand(annotation.points, color: color.withAlphaComponent(0.3 * alpha), lineWidth: lineWidth * 4)
         case .text:
@@ -230,6 +232,56 @@ class OverlayView: NSView {
         )
         let path = NSBezierPath(rect: rect)
         path.lineWidth = lineWidth
+        color.setStroke()
+        path.stroke()
+    }
+
+    private func drawHeart(_ points: [CGPoint], color: NSColor, lineWidth: CGFloat) {
+        guard let first = points.first, let last = points.last else { return }
+        let rect = NSRect(
+            x: min(first.x, last.x),
+            y: min(first.y, last.y),
+            width: abs(last.x - first.x),
+            height: abs(last.y - first.y)
+        )
+        guard rect.width > 2, rect.height > 2 else { return }
+
+        let path = NSBezierPath()
+        let w = rect.width
+        let h = rect.height
+        let x = rect.minX
+        let y = rect.minY
+
+        // Bottom tip
+        path.move(to: CGPoint(x: x + w * 0.5, y: y))
+        // Right side up to top-right bump
+        path.curve(
+            to: CGPoint(x: x + w, y: y + h * 0.65),
+            controlPoint1: CGPoint(x: x + w * 0.8, y: y + h * 0.05),
+            controlPoint2: CGPoint(x: x + w, y: y + h * 0.35)
+        )
+        // Top-right bump arc
+        path.curve(
+            to: CGPoint(x: x + w * 0.5, y: y + h * 0.72),
+            controlPoint1: CGPoint(x: x + w, y: y + h),
+            controlPoint2: CGPoint(x: x + w * 0.6, y: y + h)
+        )
+        // Top-left bump arc
+        path.curve(
+            to: CGPoint(x: x, y: y + h * 0.65),
+            controlPoint1: CGPoint(x: x + w * 0.4, y: y + h),
+            controlPoint2: CGPoint(x: x, y: y + h)
+        )
+        // Left side back to bottom tip
+        path.curve(
+            to: CGPoint(x: x + w * 0.5, y: y),
+            controlPoint1: CGPoint(x: x, y: y + h * 0.35),
+            controlPoint2: CGPoint(x: x + w * 0.2, y: y + h * 0.05)
+        )
+        path.close()
+
+        path.lineWidth = lineWidth
+        path.lineJoinStyle = .round
         color.setStroke()
         path.stroke()
     }
@@ -520,6 +572,7 @@ class OverlayView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         NSCursor.crosshair.set()
+        updateHUD()
         return true
     }
 
@@ -536,6 +589,7 @@ class OverlayView: NSView {
         case .line:        currentTool = .line
         case .rectangle:   currentTool = .rectangle
         case .circle:      currentTool = .circle
+        case .heart:       currentTool = .heart
         case .highlighter: currentTool = .highlighter
         case .text:        currentTool = .text
         case .eraser:      currentTool = .eraser
