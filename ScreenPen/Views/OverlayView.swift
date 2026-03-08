@@ -351,23 +351,17 @@ class OverlayView: NSView {
     }
 
     private func showScreenshotFeedback() {
-        let previousText = hudPanel.currentText
-        hudPanel.setText("Screenshot saved & copied")
+        hudPanel.showMessage("Screenshot saved & copied ✓")
         if hudPanel.isHidden {
-            hudPanel.sizeToFit()
+            hudPanel.layoutForCurrentState()
             let x = (bounds.width - hudPanel.frame.width) / 2
-            let y = bounds.height - hudPanel.frame.height - 40
+            let y = bounds.height - hudPanel.frame.height - 48
             hudPanel.setFrameOrigin(CGPoint(x: x, y: y))
+            hudPanel.isHidden = false
         }
-        hudPanel.isHidden = false
         screenshotFeedbackTimer?.invalidate()
         screenshotFeedbackTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            if let text = previousText {
-                self.hudPanel.setText(text)
-            } else {
-                self.updateHUD()
-            }
+            self?.updateHUD()
         }
     }
 
@@ -630,12 +624,19 @@ class OverlayView: NSView {
         case .screenshot:
             captureScreenshot()
             return
+        case .showHUD:
+            if hudPanel.isHidden {
+                updateHUD()
+            } else {
+                hudPanel.isHidden = true
+            }
+            return
         }
         updateHUD()
         NSCursor.crosshair.set()
     }
 
-    // MARK: - HUD (floating status, draggable)
+    // MARK: - HUD (floating status, draggable, interactive)
 
     private lazy var hudPanel: HUDPanel = {
         let panel = HUDPanel()
@@ -644,43 +645,40 @@ class OverlayView: NSView {
         panel.onClose = { [weak self] in
             self?.hudPanel.isHidden = true
         }
+        panel.onColorChange = { [weak self] color in
+            self?.currentColor = color
+            self?.updateHUD()
+        }
+        panel.onToolChange = { [weak self] tool in
+            self?.currentTool = tool
+            self?.updateHUD()
+            NSCursor.crosshair.set()
+        }
         return panel
     }()
 
     private var screenshotFeedbackTimer: Timer?
 
     private func updateHUD() {
-        let parts: [String] = [
-            currentTool.rawValue,
-            colorName(currentColor),
-            "W:\(Int(currentLineWidth))",
-            fadeEnabled ? "Fade" : nil,
-            boardMode != .none ? boardMode.rawValue : nil,
-            spotlightEnabled ? "Spot" : nil,
-            interactiveMode ? "Interactive(Fn)" : nil,
-        ].compactMap { $0 }
+        hudPanel.update(
+            tool: currentTool,
+            color: currentColor,
+            width: Int(currentLineWidth),
+            extras: [
+                fadeEnabled ? "Fade" : nil,
+                boardMode != .none ? boardMode.rawValue : nil,
+                spotlightEnabled ? "Spot" : nil,
+                interactiveMode ? "Fn" : nil,
+            ].compactMap { $0 }
+        )
 
-        hudPanel.setText(parts.joined(separator: " | "))
-
-        // Only reposition on first show; afterwards user may have dragged it
         if hudPanel.isHidden {
-            hudPanel.sizeToFit()
+            hudPanel.layoutForCurrentState()
             let x = (bounds.width - hudPanel.frame.width) / 2
-            let y = bounds.height - hudPanel.frame.height - 40
+            let y = bounds.height - hudPanel.frame.height - 48
             hudPanel.setFrameOrigin(CGPoint(x: x, y: y))
         }
         hudPanel.isHidden = false
-    }
-
-    private func colorName(_ color: NSColor) -> String {
-        switch color {
-        case .systemRed: return "Red"
-        case .systemOrange: return "Orange"
-        case .systemYellow: return "Yellow"
-        case .systemGreen: return "Green"
-        case .systemBlue: return "Blue"
-        default: return "Custom"
-        }
     }
 
     // MARK: - Actions
@@ -724,99 +722,479 @@ class OverlayView: NSView {
     }
 }
 
-// MARK: - HUDPanel (draggable, closeable)
+// MARK: - HUDPanel (premium, draggable, interactive)
 
 private class HUDPanel: NSView {
-    var onClose: (() -> Void)?
-    private(set) var currentText: String?
 
-    private let label: NSTextField = {
-        let l = NSTextField(labelWithString: "")
-        l.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        l.textColor = .white
-        l.isBezeled = false
-        l.isEditable = false
-        l.drawsBackground = false
-        return l
+    // MARK: Callbacks
+    var onClose: (() -> Void)?
+    var onColorChange: ((NSColor) -> Void)?
+    var onToolChange: ((DrawingTool) -> Void)?
+
+    // MARK: State
+    private var currentTool: DrawingTool = .pen
+    private var currentColor: NSColor = .systemRed
+    private var currentWidth: Int = 3
+    private var currentExtras: [String] = []
+    private var messageMode = false
+
+    private var colorPickerVisible = false
+    private var toolPickerVisible = false
+
+    // MARK: Layout constants
+    private let rowH: CGFloat = 44
+    private let pickerH: CGFloat = 40
+    private let hPad: CGFloat = 14
+    private let itemGap: CGFloat = 10
+    private let dotSize: CGFloat = 20
+    private let toolIconSize: CGFloat = 20
+
+    // MARK: Drag
+    private var dragOffset: CGPoint = .zero
+    private var isDragging = false
+
+    // MARK: Subviews — background
+    private let vfx: NSVisualEffectView = {
+        let v = NSVisualEffectView()
+        v.material = .hudWindow
+        v.blendingMode = .behindWindow
+        v.state = .active
+        v.wantsLayer = true
+        v.layer?.cornerRadius = 14
+        v.layer?.masksToBounds = true
+        v.layer?.borderWidth = 0.5
+        v.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        return v
     }()
 
+    // MARK: Main row elements
+    private let toolIcon: NSImageView = {
+        let iv = NSImageView()
+        iv.imageScaling = .scaleProportionallyUpOrDown
+        iv.contentTintColor = .white
+        return iv
+    }()
+    private let toolLabel: NSTextField = {
+        let l = NSTextField(labelWithString: "")
+        l.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        l.textColor = .white
+        l.isBezeled = false; l.isEditable = false; l.drawsBackground = false
+        return l
+    }()
+    private let colorDot: NSView = {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.cornerRadius = 10
+        v.layer?.borderWidth = 1.5
+        v.layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
+        return v
+    }()
+    private let widthLabel: NSTextField = {
+        let l = NSTextField(labelWithString: "")
+        l.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        l.textColor = NSColor.white.withAlphaComponent(0.7)
+        l.isBezeled = false; l.isEditable = false; l.drawsBackground = false
+        return l
+    }()
+    private let extrasLabel: NSTextField = {
+        let l = NSTextField(labelWithString: "")
+        l.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        l.textColor = NSColor.white.withAlphaComponent(0.5)
+        l.isBezeled = false; l.isEditable = false; l.drawsBackground = false
+        return l
+    }()
     private lazy var closeBtn: NSButton = {
         let btn = NSButton(title: "✕", target: self, action: #selector(closeTapped))
-        btn.bezelStyle = .inline
-        btn.isBordered = false
-        btn.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        btn.contentTintColor = NSColor.white.withAlphaComponent(0.6)
+        btn.bezelStyle = .inline; btn.isBordered = false
+        btn.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        btn.contentTintColor = NSColor.white.withAlphaComponent(0.45)
         return btn
     }()
 
-    private var dragOffset: CGPoint = .zero
+    // MARK: Separator line
+    private let separator: NSView = {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        return v
+    }()
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        setup()
-    }
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setup()
-    }
+    // MARK: Picker container
+    private let pickerContainer: NSView = {
+        let v = NSView()
+        v.isHidden = true
+        return v
+    }()
+    private var colorSwatches: [NSView] = []
+    private var toolButtons: [NSButton] = []
+
+    // MARK: Message label (for transient messages like screenshot)
+    private let messageLabel: NSTextField = {
+        let l = NSTextField(labelWithString: "")
+        l.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        l.textColor = .white
+        l.isBezeled = false; l.isEditable = false; l.drawsBackground = false
+        l.isHidden = true
+        return l
+    }()
+
+    // MARK: Init
+    override init(frame: NSRect) { super.init(frame: frame); setup() }
+    required init?(coder: NSCoder) { super.init(coder: coder); setup() }
 
     private func setup() {
+        addSubview(vfx)
+        vfx.addSubview(toolIcon)
+        vfx.addSubview(toolLabel)
+        vfx.addSubview(colorDot)
+        vfx.addSubview(widthLabel)
+        vfx.addSubview(extrasLabel)
+        vfx.addSubview(closeBtn)
+        vfx.addSubview(separator)
+        vfx.addSubview(pickerContainer)
+        vfx.addSubview(messageLabel)
+
+        buildColorSwatches()
+        buildToolButtons()
+
+        // Clickable areas
+        let toolArea = ClickableView { [weak self] in self?.toggleToolPicker() }
+        let colorArea = ClickableView { [weak self] in self?.toggleColorPicker() }
+        toolArea.frame = .zero
+        colorArea.frame = .zero
+        vfx.addSubview(toolArea)
+        vfx.addSubview(colorArea)
+        self.toolClickArea = toolArea
+        self.colorClickArea = colorArea
+    }
+
+    private var toolClickArea: ClickableView?
+    private var colorClickArea: ClickableView?
+
+    // MARK: Build pickers
+
+    private func buildColorSwatches() {
+        colorSwatches.forEach { $0.removeFromSuperview() }
+        colorSwatches = SettingsManager.colorOptions.map { color in
+            let v = NSView()
+            v.wantsLayer = true
+            v.layer?.backgroundColor = color.cgColor
+            v.layer?.cornerRadius = 11
+            v.layer?.borderWidth = 1.5
+            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.25).cgColor
+            let click = ClickableView { [weak self] in
+                self?.onColorChange?(color)
+                self?.hideAllPickers()
+            }
+            click.frame = v.bounds
+            click.autoresizingMask = [.width, .height]
+            v.addSubview(click)
+            pickerContainer.addSubview(v)
+            return v
+        }
+    }
+
+    private func buildToolButtons() {
+        toolButtons.forEach { $0.removeFromSuperview() }
+        toolButtons = DrawingTool.allCases.map { tool in
+            let btn = NSButton(title: "", target: self, action: #selector(toolBtnTapped(_:)))
+            btn.bezelStyle = .inline
+            btn.isBordered = false
+            if let img = NSImage(systemSymbolName: tool.symbolName, accessibilityDescription: tool.rawValue) {
+                btn.image = img
+                btn.imageScaling = .scaleProportionallyUpOrDown
+            } else {
+                btn.title = String(tool.rawValue.prefix(1))
+                btn.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            }
+            btn.contentTintColor = .white
+            btn.tag = DrawingTool.allCases.firstIndex(of: tool) ?? 0
+            pickerContainer.addSubview(btn)
+            return btn
+        }
+    }
+
+    @objc private func toolBtnTapped(_ sender: NSButton) {
+        let tool = DrawingTool.allCases[sender.tag]
+        onToolChange?(tool)
+        hideAllPickers()
+    }
+
+    // MARK: Public API
+
+    func update(tool: DrawingTool, color: NSColor, width: Int, extras: [String]) {
+        currentTool = tool; currentColor = color; currentWidth = width; currentExtras = extras
+        guard !messageMode else { return }
+
+        if let img = NSImage(systemSymbolName: tool.symbolName, accessibilityDescription: tool.rawValue) {
+            toolIcon.image = img
+            toolIcon.isHidden = false
+        } else {
+            toolIcon.isHidden = true
+        }
+        toolLabel.stringValue = tool.rawValue
+        toolLabel.sizeToFit()
+
+        colorDot.layer?.backgroundColor = color.cgColor
+
+        widthLabel.stringValue = "●".repeated(min(width, 5))
+        widthLabel.sizeToFit()
+
+        extrasLabel.stringValue = extras.isEmpty ? "" : extras.joined(separator: " · ")
+        extrasLabel.sizeToFit()
+
+        updateSelectedSwatch()
+        updateSelectedTool()
+        layoutForCurrentState()
+    }
+
+    func showMessage(_ msg: String) {
+        messageMode = true
+        messageLabel.stringValue = msg
+        messageLabel.sizeToFit()
+        messageLabel.isHidden = false
+        toolIcon.isHidden = true; toolLabel.isHidden = true
+        colorDot.isHidden = true; widthLabel.isHidden = true
+        extrasLabel.isHidden = true
+        toolClickArea?.isHidden = true; colorClickArea?.isHidden = true
+        separator.isHidden = true; pickerContainer.isHidden = true
+        colorPickerVisible = false; toolPickerVisible = false
+        layoutForCurrentState()
+    }
+
+    func endMessageMode() {
+        messageMode = false
+        messageLabel.isHidden = true
+        toolIcon.isHidden = false; toolLabel.isHidden = false
+        colorDot.isHidden = false; widthLabel.isHidden = false
+        toolClickArea?.isHidden = false; colorClickArea?.isHidden = false
+    }
+
+    // MARK: Layout
+
+    func layoutForCurrentState() {
+        if messageMode {
+            let msgW = messageLabel.frame.width + hPad * 2 + 28
+            let totalH = rowH
+            setFrameSize(NSSize(width: msgW, height: totalH))
+            vfx.frame = bounds
+            let cx = (msgW - messageLabel.frame.width) / 2
+            messageLabel.frame.origin = CGPoint(x: cx, y: (rowH - messageLabel.frame.height) / 2)
+            closeBtn.frame = NSRect(x: msgW - 26, y: (rowH - 16) / 2, width: 20, height: 16)
+            return
+        }
+
+        // Main row layout
+        var x = hPad
+
+        // Tool icon
+        let iconSize: CGFloat = toolIconSize
+        toolIcon.frame = NSRect(x: x, y: (rowH - iconSize) / 2, width: iconSize, height: iconSize)
+        x += iconSize + 6
+
+        // Tool label (clickable area)
+        toolLabel.frame.origin = CGPoint(x: x, y: (rowH - toolLabel.frame.height) / 2)
+        let toolAreaW = toolLabel.frame.width + 4
+        toolClickArea?.frame = NSRect(x: x - 2, y: 0, width: toolAreaW, height: rowH)
+        x += toolAreaW + itemGap
+
+        // Separator dot
+        x += 4
+        let sepDot = NSTextField(labelWithString: "·")
+        sepDot.textColor = NSColor.white.withAlphaComponent(0.3)
+        sepDot.font = NSFont.systemFont(ofSize: 13)
+        sepDot.sizeToFit()
+        x += sepDot.frame.width + 4
+
+        // Color dot (clickable)
+        colorDot.frame = NSRect(x: x, y: (rowH - dotSize) / 2, width: dotSize, height: dotSize)
+        colorClickArea?.frame = NSRect(x: x - 4, y: 0, width: dotSize + 8, height: rowH)
+        x += dotSize + itemGap
+
+        // Width dots
+        widthLabel.frame.origin = CGPoint(x: x, y: (rowH - widthLabel.frame.height) / 2)
+        x += widthLabel.frame.width + itemGap
+
+        // Extras
+        if !currentExtras.isEmpty {
+            extrasLabel.isHidden = false
+            extrasLabel.frame.origin = CGPoint(x: x, y: (rowH - extrasLabel.frame.height) / 2)
+            x += extrasLabel.frame.width + itemGap
+        } else {
+            extrasLabel.isHidden = true
+        }
+
+        // Close button
+        x += 4
+        let closeBtnW: CGFloat = 20
+        closeBtn.frame = NSRect(x: x, y: (rowH - 16) / 2, width: closeBtnW, height: 16)
+        x += closeBtnW + hPad / 2
+
+        let mainRowW = x
+
+        // Picker layout
+        var totalH = rowH
+        if colorPickerVisible || toolPickerVisible {
+            separator.isHidden = false
+            separator.frame = NSRect(x: 0, y: rowH - 0.5, width: mainRowW, height: 0.5)
+            pickerContainer.isHidden = false
+            pickerContainer.frame = NSRect(x: 0, y: rowH, width: mainRowW, height: pickerH)
+            if colorPickerVisible { layoutColorSwatches(in: pickerContainer.bounds) }
+            if toolPickerVisible { layoutToolButtons(in: pickerContainer.bounds) }
+            totalH = rowH + pickerH
+        } else {
+            separator.isHidden = true
+            pickerContainer.isHidden = true
+        }
+
+        setFrameSize(NSSize(width: mainRowW, height: totalH))
+        vfx.frame = bounds
+
+        // Shadow
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        layer?.cornerRadius = 8
-        addSubview(label)
-        addSubview(closeBtn)
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.35
+        layer?.shadowRadius = 12
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
     }
 
-    func setText(_ text: String) {
-        currentText = text
-        label.stringValue = text
-        label.sizeToFit()
-        sizeToFit()
-    }
-
-    func sizeToFit() {
-        let hPad: CGFloat = 12
-        let closeBtnW: CGFloat = 18
+    private func layoutColorSwatches(in rect: NSRect) {
+        let count = colorSwatches.count
+        let swatchSize: CGFloat = 22
         let gap: CGFloat = 6
-        let h: CGFloat = 30
-        let labelW = label.frame.width
-        let totalW = hPad + labelW + gap + closeBtnW + hPad
-
-        setFrameSize(NSSize(width: totalW, height: h))
-        label.frame = NSRect(
-            x: hPad,
-            y: (h - label.frame.height) / 2,
-            width: labelW,
-            height: label.frame.height
-        )
-        closeBtn.frame = NSRect(
-            x: totalW - closeBtnW - hPad,
-            y: (h - 16) / 2,
-            width: closeBtnW,
-            height: 16
-        )
+        let totalW = CGFloat(count) * swatchSize + CGFloat(count - 1) * gap
+        var sx = (rect.width - totalW) / 2
+        let sy = (rect.height - swatchSize) / 2
+        for swatch in colorSwatches {
+            swatch.frame = NSRect(x: sx, y: sy, width: swatchSize, height: swatchSize)
+            swatch.layer?.cornerRadius = swatchSize / 2
+            sx += swatchSize + gap
+        }
     }
 
-    @objc private func closeTapped() {
-        onClose?()
+    private func layoutToolButtons(in rect: NSRect) {
+        let count = toolButtons.count
+        let btnSize: CGFloat = 26
+        let gap: CGFloat = 4
+        let totalW = CGFloat(count) * btnSize + CGFloat(count - 1) * gap
+        var bx = (rect.width - totalW) / 2
+        let by = (rect.height - btnSize) / 2
+        for btn in toolButtons {
+            btn.frame = NSRect(x: bx, y: by, width: btnSize, height: btnSize)
+            bx += btnSize + gap
+        }
     }
 
-    // MARK: Drag support
+    private func updateSelectedSwatch() {
+        for (i, swatch) in colorSwatches.enumerated() {
+            let col = SettingsManager.colorOptions[i]
+            let isSelected = col.isApproximatelyEqual(to: currentColor)
+            swatch.layer?.borderWidth = isSelected ? 2.5 : 1.5
+            swatch.layer?.borderColor = isSelected
+                ? NSColor.white.cgColor
+                : NSColor.white.withAlphaComponent(0.25).cgColor
+        }
+    }
+
+    private func updateSelectedTool() {
+        for (i, btn) in toolButtons.enumerated() {
+            let isSelected = DrawingTool.allCases[i] == currentTool
+            btn.contentTintColor = isSelected ? NSColor.controlAccentColor : .white
+        }
+    }
+
+    // MARK: Toggle pickers
+
+    private func toggleColorPicker() {
+        toolPickerVisible = false
+        colorPickerVisible.toggle()
+        animateLayout()
+    }
+
+    private func toggleToolPicker() {
+        colorPickerVisible = false
+        toolPickerVisible.toggle()
+        animateLayout()
+    }
+
+    private func hideAllPickers() {
+        colorPickerVisible = false
+        toolPickerVisible = false
+        animateLayout()
+    }
+
+    private func animateLayout() {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layoutForCurrentState()
+        }
+    }
+
+    // MARK: Actions
+
+    @objc private func closeTapped() { onClose?() }
+
+    // MARK: Drag
 
     override func mouseDown(with event: NSEvent) {
         dragOffset = convert(event.locationInWindow, from: nil)
+        isDragging = false
     }
 
     override func mouseDragged(with event: NSEvent) {
+        isDragging = true
         guard let sv = superview else { return }
         let loc = sv.convert(event.locationInWindow, from: nil)
         setFrameOrigin(CGPoint(x: loc.x - dragOffset.x, y: loc.y - dragOffset.y))
     }
 
-    override func cursorUpdate(with event: NSEvent) {
-        NSCursor.arrow.set()
-    }
-
+    override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
     override var acceptsFirstResponder: Bool { false }
+}
+
+// MARK: - Helpers
+
+private class ClickableView: NSView {
+    private let action: () -> Void
+    init(action: @escaping () -> Void) {
+        self.action = action
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func mouseUp(with event: NSEvent) { action() }
+    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+    override var acceptsFirstResponder: Bool { false }
+}
+
+private extension DrawingTool {
+    var symbolName: String {
+        switch self {
+        case .pen:         return "pencil"
+        case .arrow:       return "arrow.up.right"
+        case .line:        return "line.diagonal"
+        case .rectangle:   return "rectangle"
+        case .circle:      return "circle"
+        case .heart:       return "heart"
+        case .highlighter: return "highlighter"
+        case .text:        return "textformat"
+        case .eraser:      return "eraser"
+        }
+    }
+}
+
+private extension String {
+    func repeated(_ count: Int) -> String {
+        String(repeating: self, count: count)
+    }
+}
+
+private extension NSColor {
+    func isApproximatelyEqual(to other: NSColor) -> Bool {
+        guard let c1 = usingColorSpace(.deviceRGB),
+              let c2 = other.usingColorSpace(.deviceRGB) else { return self == other }
+        return abs(c1.redComponent - c2.redComponent) < 0.01 &&
+               abs(c1.greenComponent - c2.greenComponent) < 0.01 &&
+               abs(c1.blueComponent - c2.blueComponent) < 0.01
+    }
 }

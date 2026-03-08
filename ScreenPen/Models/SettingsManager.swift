@@ -73,6 +73,7 @@ class SettingsManager {
         case screenshot, interactive, spotlight, boardMode, fadeToggle
         case color1, color2, color3, color4, color5
         case widthDown, widthUp
+        case showHUD
 
         var displayName: String {
             switch self {
@@ -97,6 +98,7 @@ class SettingsManager {
             case .color5: return "Color: Blue"
             case .widthDown: return "Width -"
             case .widthUp: return "Width +"
+            case .showHUD: return "Show HUD"
             }
         }
 
@@ -123,6 +125,7 @@ class SettingsManager {
             case .color5: return 23      // 5
             case .widthDown: return 33   // [
             case .widthUp: return 30     // ]
+            case .showHUD: return 50     // `
             }
         }
     }
