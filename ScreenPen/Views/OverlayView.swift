@@ -356,7 +356,8 @@ class OverlayView: NSView {
             hudPanel.layoutForCurrentState()
             let x = (bounds.width - hudPanel.frame.width) / 2
             let y = bounds.height - hudPanel.frame.height - 48
-            hudPanel.setFrameOrigin(CGPoint(x: x, y: y))
+            hudPanel.setPinnedOrigin(CGPoint(x: x, y: y))
+            hudPanel.layoutForCurrentState()
             hudPanel.isHidden = false
         }
         screenshotFeedbackTimer?.invalidate()
@@ -676,7 +677,8 @@ class OverlayView: NSView {
             hudPanel.layoutForCurrentState()
             let x = (bounds.width - hudPanel.frame.width) / 2
             let y = bounds.height - hudPanel.frame.height - 48
-            hudPanel.setFrameOrigin(CGPoint(x: x, y: y))
+            hudPanel.setPinnedOrigin(CGPoint(x: x, y: y))
+            hudPanel.layoutForCurrentState()
         }
         hudPanel.isHidden = false
     }
@@ -752,6 +754,13 @@ private class HUDPanel: NSView {
     // MARK: Drag
     private var dragOffset: CGPoint = .zero
     private var isDragging = false
+    // pinnedOrigin = panel origin when NO picker is shown
+    // When picker shows, origin.y shifts down by pickerH so main bar stays put
+    private var pinnedOrigin: CGPoint = .zero
+
+    func setPinnedOrigin(_ origin: CGPoint) {
+        pinnedOrigin = origin
+    }
 
     // MARK: Subviews — background
     private let vfx: NSVisualEffectView = {
@@ -973,10 +982,17 @@ private class HUDPanel: NSView {
     // MARK: Layout
 
     func layoutForCurrentState() {
+        let pickerVisible = colorPickerVisible || toolPickerVisible
+        // In AppKit, Y=0 is at the BOTTOM of the view.
+        // We want the main bar at the TOP (visually), picker BELOW it (visually).
+        // So:  mainBarBaseY = pickerVisible ? pickerH : 0
+        //       pickerContainer sits at y=0
+        //       panel grows DOWN: origin.y shifts down by pickerH when picker shown
+        let mainY: CGFloat = pickerVisible ? pickerH : 0
+
         if messageMode {
             let msgW = messageLabel.frame.width + hPad * 2 + 28
-            let totalH = rowH
-            setFrameSize(NSSize(width: msgW, height: totalH))
+            frame = NSRect(origin: pinnedOrigin, size: NSSize(width: msgW, height: rowH))
             vfx.frame = bounds
             let cx = (msgW - messageLabel.frame.width) / 2
             messageLabel.frame.origin = CGPoint(x: cx, y: (rowH - messageLabel.frame.height) / 2)
@@ -984,73 +1000,61 @@ private class HUDPanel: NSView {
             return
         }
 
-        // Main row layout
+        // Main row — all y offsets are relative to mainY
         var x = hPad
 
-        // Tool icon
-        let iconSize: CGFloat = toolIconSize
-        toolIcon.frame = NSRect(x: x, y: (rowH - iconSize) / 2, width: iconSize, height: iconSize)
-        x += iconSize + 6
+        toolIcon.frame = NSRect(x: x, y: mainY + (rowH - toolIconSize) / 2,
+                                width: toolIconSize, height: toolIconSize)
+        x += toolIconSize + 6
 
-        // Tool label (clickable area)
-        toolLabel.frame.origin = CGPoint(x: x, y: (rowH - toolLabel.frame.height) / 2)
+        toolLabel.frame.origin = CGPoint(x: x, y: mainY + (rowH - toolLabel.frame.height) / 2)
         let toolAreaW = toolLabel.frame.width + 4
-        toolClickArea?.frame = NSRect(x: x - 2, y: 0, width: toolAreaW, height: rowH)
-        x += toolAreaW + itemGap
+        toolClickArea?.frame = NSRect(x: x - 2, y: mainY, width: toolAreaW, height: rowH)
+        x += toolAreaW + itemGap + 8  // +8 visual gap before dot
 
-        // Separator dot
-        x += 4
-        let sepDot = NSTextField(labelWithString: "·")
-        sepDot.textColor = NSColor.white.withAlphaComponent(0.3)
-        sepDot.font = NSFont.systemFont(ofSize: 13)
-        sepDot.sizeToFit()
-        x += sepDot.frame.width + 4
-
-        // Color dot (clickable)
-        colorDot.frame = NSRect(x: x, y: (rowH - dotSize) / 2, width: dotSize, height: dotSize)
-        colorClickArea?.frame = NSRect(x: x - 4, y: 0, width: dotSize + 8, height: rowH)
+        colorDot.frame = NSRect(x: x, y: mainY + (rowH - dotSize) / 2, width: dotSize, height: dotSize)
+        colorClickArea?.frame = NSRect(x: x - 4, y: mainY, width: dotSize + 8, height: rowH)
         x += dotSize + itemGap
 
-        // Width dots
-        widthLabel.frame.origin = CGPoint(x: x, y: (rowH - widthLabel.frame.height) / 2)
+        widthLabel.frame.origin = CGPoint(x: x, y: mainY + (rowH - widthLabel.frame.height) / 2)
         x += widthLabel.frame.width + itemGap
 
-        // Extras
         if !currentExtras.isEmpty {
             extrasLabel.isHidden = false
-            extrasLabel.frame.origin = CGPoint(x: x, y: (rowH - extrasLabel.frame.height) / 2)
+            extrasLabel.frame.origin = CGPoint(x: x, y: mainY + (rowH - extrasLabel.frame.height) / 2)
             x += extrasLabel.frame.width + itemGap
         } else {
             extrasLabel.isHidden = true
         }
 
-        // Close button
         x += 4
-        let closeBtnW: CGFloat = 20
-        closeBtn.frame = NSRect(x: x, y: (rowH - 16) / 2, width: closeBtnW, height: 16)
-        x += closeBtnW + hPad / 2
+        closeBtn.frame = NSRect(x: x, y: mainY + (rowH - 16) / 2, width: 20, height: 16)
+        x += 20 + hPad / 2
 
         let mainRowW = x
 
-        // Picker layout
-        var totalH = rowH
-        if colorPickerVisible || toolPickerVisible {
+        // Picker sits BELOW main row (y=0 in AppKit = visually below)
+        let totalH: CGFloat = pickerVisible ? rowH + pickerH : rowH
+        if pickerVisible {
             separator.isHidden = false
-            separator.frame = NSRect(x: 0, y: rowH - 0.5, width: mainRowW, height: 0.5)
+            // Separator sits just below the main row
+            separator.frame = NSRect(x: 0, y: pickerH, width: mainRowW, height: 0.5)
             pickerContainer.isHidden = false
-            pickerContainer.frame = NSRect(x: 0, y: rowH, width: mainRowW, height: pickerH)
+            pickerContainer.frame = NSRect(x: 0, y: 0, width: mainRowW, height: pickerH)
             if colorPickerVisible { layoutColorSwatches(in: pickerContainer.bounds) }
-            if toolPickerVisible { layoutToolButtons(in: pickerContainer.bounds) }
-            totalH = rowH + pickerH
+            if toolPickerVisible  { layoutToolButtons(in: pickerContainer.bounds) }
         } else {
             separator.isHidden = true
             pickerContainer.isHidden = true
         }
 
-        setFrameSize(NSSize(width: mainRowW, height: totalH))
+        // Shift panel origin DOWN when picker is shown so main bar stays in place
+        let origin = pickerVisible
+            ? CGPoint(x: pinnedOrigin.x, y: pinnedOrigin.y - pickerH)
+            : pinnedOrigin
+        frame = NSRect(origin: origin, size: NSSize(width: mainRowW, height: totalH))
         vfx.frame = bounds
 
-        // Shadow
         wantsLayer = true
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = 0.35
@@ -1146,7 +1150,13 @@ private class HUDPanel: NSView {
         isDragging = true
         guard let sv = superview else { return }
         let loc = sv.convert(event.locationInWindow, from: nil)
-        setFrameOrigin(CGPoint(x: loc.x - dragOffset.x, y: loc.y - dragOffset.y))
+        let newOrigin = CGPoint(x: loc.x - dragOffset.x, y: loc.y - dragOffset.y)
+        // Keep pinnedOrigin in sync (always represents position without picker offset)
+        let pickerVisible = colorPickerVisible || toolPickerVisible
+        pinnedOrigin = pickerVisible
+            ? CGPoint(x: newOrigin.x, y: newOrigin.y + pickerH)
+            : newOrigin
+        setFrameOrigin(newOrigin)
     }
 
     override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
