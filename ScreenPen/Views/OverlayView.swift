@@ -1034,13 +1034,18 @@ private class HUDPanel: NSView {
         let mainRowW = x
 
         // Picker sits BELOW main row (y=0 in AppKit = visually below)
+        // Calculate picker width needed
+        var panelW = mainRowW
+        if pickerVisible {
+            let pickerNeededW = pickerContentWidth()
+            panelW = max(mainRowW, pickerNeededW + hPad * 2)
+        }
         let totalH: CGFloat = pickerVisible ? rowH + pickerH : rowH
         if pickerVisible {
             separator.isHidden = false
-            // Separator sits just below the main row
-            separator.frame = NSRect(x: 0, y: pickerH, width: mainRowW, height: 0.5)
+            separator.frame = NSRect(x: 0, y: pickerH, width: panelW, height: 0.5)
             pickerContainer.isHidden = false
-            pickerContainer.frame = NSRect(x: 0, y: 0, width: mainRowW, height: pickerH)
+            pickerContainer.frame = NSRect(x: 0, y: 0, width: panelW, height: pickerH)
             if colorPickerVisible { layoutColorSwatches(in: pickerContainer.bounds) }
             if toolPickerVisible  { layoutToolButtons(in: pickerContainer.bounds) }
         } else {
@@ -1049,10 +1054,12 @@ private class HUDPanel: NSView {
         }
 
         // Shift panel origin DOWN when picker is shown so main bar stays in place
+        // Also center horizontally if picker is wider than main row
+        let widthDelta = panelW - mainRowW
         let origin = pickerVisible
-            ? CGPoint(x: pinnedOrigin.x, y: pinnedOrigin.y - pickerH)
+            ? CGPoint(x: pinnedOrigin.x - widthDelta / 2, y: pinnedOrigin.y - pickerH)
             : pinnedOrigin
-        frame = NSRect(origin: origin, size: NSSize(width: mainRowW, height: totalH))
+        frame = NSRect(origin: origin, size: NSSize(width: panelW, height: totalH))
         vfx.frame = bounds
 
         wantsLayer = true
@@ -1062,10 +1069,26 @@ private class HUDPanel: NSView {
         layer?.shadowOffset = CGSize(width: 0, height: -3)
     }
 
+    private func pickerContentWidth() -> CGFloat {
+        if colorPickerVisible {
+            let count = CGFloat(colorSwatches.count)
+            return count * 22 + (count - 1) * 8
+        }
+        if toolPickerVisible {
+            let count = CGFloat(toolButtons.count)
+            return count * 30 + (count - 1) * 6
+        }
+        return 0
+    }
+
     private func layoutColorSwatches(in rect: NSRect) {
+        // Show swatches, hide tool buttons
+        colorSwatches.forEach { $0.isHidden = false }
+        toolButtons.forEach { $0.isHidden = true }
+
         let count = colorSwatches.count
         let swatchSize: CGFloat = 22
-        let gap: CGFloat = 6
+        let gap: CGFloat = 8
         let totalW = CGFloat(count) * swatchSize + CGFloat(count - 1) * gap
         var sx = (rect.width - totalW) / 2
         let sy = (rect.height - swatchSize) / 2
@@ -1077,9 +1100,13 @@ private class HUDPanel: NSView {
     }
 
     private func layoutToolButtons(in rect: NSRect) {
+        // Show tool buttons, hide swatches
+        toolButtons.forEach { $0.isHidden = false }
+        colorSwatches.forEach { $0.isHidden = true }
+
         let count = toolButtons.count
-        let btnSize: CGFloat = 26
-        let gap: CGFloat = 4
+        let btnSize: CGFloat = 30
+        let gap: CGFloat = 6
         let totalW = CGFloat(count) * btnSize + CGFloat(count - 1) * gap
         var bx = (rect.width - totalW) / 2
         let by = (rect.height - btnSize) / 2
