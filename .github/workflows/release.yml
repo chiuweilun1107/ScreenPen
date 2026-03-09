@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Release
+        run: |
+          xcodebuild -project ScreenPen.xcodeproj \
+            -scheme ScreenPen \
+            -configuration Release \
+            build \
+            SYMROOT=build/xcode \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            -quiet
+
+      - name: Create DMG
+        run: |
+          APP_PATH="build/xcode/Release/ScreenPen.app"
+          DMG_DIR="build/dmg"
+          DMG_OUTPUT="build/ScreenPen.dmg"
+          mkdir -p "$DMG_DIR"
+          cp -R "$APP_PATH" "$DMG_DIR/"
+          ln -s /Applications "$DMG_DIR/Applications"
+          hdiutil create -volname "ScreenPen" \
+            -srcfolder "$DMG_DIR" \
+            -ov -format UDZO \
+            "$DMG_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/ScreenPen.dmg
+          generate_release_notes: true
