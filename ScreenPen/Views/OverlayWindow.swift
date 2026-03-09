@@ -16,7 +16,7 @@ class OverlayWindow: NSPanel {
         ignoresMouseEvents = false
         isRestorable = false
         isMovableByWindowBackground = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // Set above all other windows
         let maxLevel = [

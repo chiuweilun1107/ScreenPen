@@ -315,39 +315,67 @@ class OverlayView: NSView {
     // MARK: - Screenshot
 
     func captureScreenshot() {
-        guard self.window != nil else { return }
+        guard let window = self.window, let screen = window.screen else { return }
         // Temporarily hide HUD for clean capture
         let hudWasVisible = !hudPanel.isHidden
         hudPanel.isHidden = true
 
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
-        cacheDisplay(in: bounds, to: rep)
+        // Small delay to ensure HUD is hidden before capture
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self else { return }
 
-        if hudWasVisible { hudPanel.isHidden = false }
+            let screenRect = screen.frame
+            // Capture everything below our overlay (desktop + apps)
+            let bgImage = CGWindowListCreateImage(
+                screenRect,
+                .optionOnScreenBelowWindow,
+                CGWindowID(window.windowNumber),
+                [.bestResolution]
+            )
 
-        let image = NSImage(size: bounds.size)
-        image.addRepresentation(rep)
+            // Capture our overlay (annotations only)
+            guard let rep = self.bitmapImageRepForCachingDisplay(in: self.bounds) else {
+                if hudWasVisible { self.hudPanel.isHidden = false }
+                return
+            }
+            self.cacheDisplay(in: self.bounds, to: rep)
 
-        // Copy to clipboard
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([image])
+            if hudWasVisible { self.hudPanel.isHidden = false }
 
-        // Save to Desktop
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
-        let filename = "ScreenPen-\(formatter.string(from: Date())).png"
-        let desktopURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
-        let fileURL = desktopURL.appendingPathComponent(filename)
+            // Composite: background + annotations
+            let size = screenRect.size
+            let finalImage = NSImage(size: size)
+            finalImage.lockFocus()
+            if let bg = bgImage {
+                let bgNSImage = NSImage(cgImage: bg, size: size)
+                bgNSImage.draw(in: NSRect(origin: .zero, size: size))
+            }
+            let overlayImage = NSImage(size: self.bounds.size)
+            overlayImage.addRepresentation(rep)
+            overlayImage.draw(in: NSRect(origin: .zero, size: size))
+            finalImage.unlockFocus()
 
-        if let tiffData = image.tiffRepresentation,
-           let bitmapRep = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
-            try? pngData.write(to: fileURL)
+            // Copy to clipboard
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.writeObjects([finalImage])
+
+            // Save to Desktop
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+            let filename = "ScreenPen-\(formatter.string(from: Date())).png"
+            let desktopURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
+            let fileURL = desktopURL.appendingPathComponent(filename)
+
+            if let tiffData = finalImage.tiffRepresentation,
+               let bitmapRep = NSBitmapImageRep(data: tiffData),
+               let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+                try? pngData.write(to: fileURL)
+            }
+
+            // Flash feedback
+            self.showScreenshotFeedback()
         }
-
-        // Flash feedback
-        showScreenshotFeedback()
     }
 
     private func showScreenshotFeedback() {
